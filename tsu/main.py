@@ -5,69 +5,74 @@
 import os
 import sys
 
-import shlex, subprocess
+import os
+import pwd
+import pprint
 from pathlib import Path, PurePath
+
+
 from docopt import docopt
 
-from .conlog import Conlog
-from .exec import magisk_call
+from conlog import Conlog
+from .exec import TsuExec
 
+from .su_bin import magisk, losu, chsu
+from .defs import EnvMap, GetShell
 from . import consts
 
-conlog = Conlog(__name__, level=Conlog.DEBUG)
+CUR_UID = os.getuid()
 
 
 def cli():
     """
     tsu A su interface wrapper for Termux
 
-    Usage: tsu
-        tsu [ -s SHELL ]  [-pe]
-        tsu [ -h | --help | --version ]
+    Usage: 
+        tsu
+        tsu [ -s SHELL ]  [-pe] [USER] 
+        tsu --debug [ -s SHELL ]  [-pel] [USER]
+        tsu -h | --help | --version 
+        
 
     Options:
     -s <shell>   Use an alternate specified shell.
+    -l           Start a login shell.
+    -p           Prepend system binaries to PATH
+    -e           Start with a fresh environment.
+    --debug      Output debugging information to stderr.
     -h --help    Show this screen.
     --version    Show version.
+
     """
+
     args = docopt(cli.__doc__)
-    print(args)
-    env_copy = os.environ
 
-    CONFIG_SHELL = args.get("-s")
-    if args.get("-p"):
-        NEW_PATH = add_to_path(ANDROIDSYSTEM_PATHS)
-    shell = get_shell(CONFIG_SHELL)
-    env_copy["HISTFILE"] = hist_file(shell)
+    ### Debug handler
+    debug_enabled = False
+    conlog = Conlog("__main__", Conlog.DEBUG, enabled=debug_enabled)
+    tsu_exec = conlog.impl(TsuExec, Conlog.DEBUG, debug_enabled)
 
-    # Check if we are on a Magisk kernel.
-    if consts.MAGISK_BINARY.exists():
-        magisk_call(shell, env_copy)
-    else:
-        su_bin = next((p for p in consts.SU_BINARY if p.exists()), None)
-        su_call(su_bin, shell, env_copy)
-    pass
+    if args["--debug"] == True:
+        print(f"Called with user={CUR_UID} ")
+        args_fmt = "".join(f"{k}:{v} " for k, v in args.items())
+        print(args_fmt)
+        debug_enabled = True
+    ### Debug handler
 
+    ### Setup Shell and Enviroment
+    env_new = EnvMap(
+        prepend=(args.get("-p")), clean=(args.get("-e")), usern=(args.get("USER"))
+    )
+    env_new.setShell(args.get("-s"), CUR_UID)
+    env, shell = env_new.getEnv()
 
-def hist_file(shell):
-    shellname = PurePath(shell).name
-    histfile = Path.home() / f"{shellname}_history_root"
-    return str(histfile)
+    # Check `su` binaries:
+    su_bins = [magisk, losu, chsu]
+    for su_bin in su_bins:
+        try:
+            tsu_exec.ver_cmp(su_bin, shell, env)
+        except PermissionError:
+            pass
 
-
-def get_shell(shell):
-    #if [ -n "$USER_SHELL" ]; then
-    # Expand //usr/ to /usr/
-    #  root_shell="$USER_SHELL_EXPANDED"
-    root_shell = "$PREFIX/bin/sh"
-    USER_SHELL = Path(Path.home(), ".termux/shell")
-    BASH_SHELL = Path(consts.TERMUX_PREFIX, "bin/bash")
-    if shell == "system":
-        root_shell = consts.SYS_SHELL
-    # Check if user has set a login shell
-    elif USER_SHELL.exists():
-        root_shell = str(USER_SHELL.resolve())
-    # Or at least installed bash
-    elif BASH_SHELL.exists():
-        root_shell = str(BASH_SHELL)
-    return root_shell
+    print("su binary not found.")
+    print("Are you rooted? ")

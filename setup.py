@@ -15,7 +15,7 @@ readme_file="README.md"
 with open(readme_file) as f:
     readme = f.read()
 
-REQUIRES = ['docopt']
+REQUIRES = ['docopt', 'wrapt', 'attr']
 
 setup(
     name='tsu',
